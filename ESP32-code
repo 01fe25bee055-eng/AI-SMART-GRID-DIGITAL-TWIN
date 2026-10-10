@@ -1,1 +1,193 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
+// OLED
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Sensor pins
+#define TEMP_PIN 4
+#define VOLTAGE_PIN 35
+#define CURRENT_PIN 34
+
+// Relay pins
+#define RELAY1 25
+#define RELAY2 26
+
+// Push buttons (button connects pin to GND)
+#define NORMAL_BTN 27
+#define OVERLOAD_BTN 14
+#define FAULT_BTN 13
+
+OneWire oneWire(TEMP_PIN);
+DallasTemperature tempSensor(&oneWire);
+
+// Adjust after calibrating your sensors
+float voltageFactor = 1.0; // PLACEHOLDER: calibrate AC RMS volts
+float currentFactor = 1.0; // PLACEHOLDER: calibrate ACS712 amps
+
+const float MAX_CURRENT = 2.0; // Example threshold, amperes
+const float MAX_TEMP = 60.0;   // Example threshold, Celsius
+
+// Many relay boards are active LOW.
+// Change these if your board is active HIGH.
+const int RELAY_ON = LOW;
+const int RELAY_OFF = HIGH;
+
+float readVoltage() {
+  // Approximate AC RMS measurement.
+  // Must be calibrated for the ZMPT101B and ADC circuit.
+  const int samples = 1000;
+  double sum = 0, sumSq = 0;
+
+  for (int i = 0; i < samples; i++) {
+    int raw = analogRead(VOLTAGE_PIN);
+    sum += raw;
+    sumSq += (double)raw * raw;
+    delayMicroseconds(200);
+  }
+
+  double mean = sum / samples;
+  double variance = sumSq / samples - mean * mean;
+  if (variance < 0) variance = 0;
+
+  float adcRms = sqrt(variance);
+  float adcVolts = adcRms * 3.3 / 4095.0;
+
+  return adcVolts * voltageFactor;
+}
+
+float readCurrent() {
+  // Basic ACS712 zero-offset method.
+  // currentFactor must be calibrated for your ACS712 version
+  // and any signal-conditioning circuit.
+  const int samples = 500;
+  long total = 0;
+
+  for (int i = 0; i < samples; i++) {
+    total += analogRead(CURRENT_PIN);
+    delayMicroseconds(200);
+  }
+
+  float adcAverage = total / (float)samples;
+  float outputVolts = adcAverage * 3.3 / 4095.0;
+
+  // Replace with your calibrated zero-current voltage.
+  float zeroCurrentVolts = 1.65;
+  return abs(outputVolts - zeroCurrentVolts) * currentFactor;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(NORMAL_BTN, INPUT_PULLUP);
+  pinMode(OVERLOAD_BTN, INPUT_PULLUP);
+  pinMode(FAULT_BTN, INPUT_PULLUP);
+
+  // Set OFF level before configuring relay outputs.
+  digitalWrite(RELAY1, RELAY_OFF);
+  digitalWrite(RELAY2, RELAY_OFF);
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+
+  analogReadResolution(12);
+  analogSetPinAttenuation(VOLTAGE_PIN, ADC_11db);
+  analogSetPinAttenuation(CURRENT_PIN, ADC_11db);
+
+  Wire.begin(21, 22);
+  tempSensor.begin();
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED not found. Check wiring/address.");
+    while (true) delay(1000);
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("AI Smart Grid");
+  display.println("Starting...");
+  display.display();
+
+  delay(1000);
+}
+
+void loop() {
+  tempSensor.requestTemperatures();
+  float temperature = tempSensor.getTempCByIndex(0);
+
+  float voltage = readVoltage();
+  float current = readCurrent();
+
+  bool normalPressed = digitalRead(NORMAL_BTN) == LOW;
+  bool overloadPressed = digitalRead(OVERLOAD_BTN) == LOW;
+  bool faultPressed = digitalRead(FAULT_BTN) == LOW;
+
+  String status = "NORMAL";
+
+  // Fault has the highest priority.
+  if (faultPressed) {
+    status = "FAULT";
+  } else if (overloadPressed ||
+             current > MAX_CURRENT ||
+             temperature > MAX_TEMP) {
+    status = "OVERLOAD";
+  } else if (normalPressed) {
+    status = "NORMAL";
+  }
+
+  // Example fail-safe demonstration behavior:
+  // Both loads are disconnected for abnormal states.
+  if (status == "NORMAL") {
+    digitalWrite(RELAY1, RELAY_ON);
+    digitalWrite(RELAY2, RELAY_ON);
+  } else {
+    digitalWrite(RELAY1, RELAY_OFF);
+    digitalWrite(RELAY2, RELAY_OFF);
+  }
+
+  // OLED display
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(1);
+
+  display.println("AI SMART GRID");
+  display.print("Status: ");
+  display.println(status);
+
+  display.print("Temp: ");
+  if (temperature == DEVICE_DISCONNECTED_C) {
+    display.println("Sensor error");
+  } else {
+    display.print(temperature, 1);
+    display.println(" C");
+  }
+
+  display.print("Voltage: ");
+  display.print(voltage, 1);
+  display.println(" V");
+
+  display.print("Current: ");
+  display.print(current, 2);
+  display.println(" A");
+
+  display.display();
+
+  // Serial Monitor
+  Serial.print("Status: ");
+  Serial.print(status);
+  Serial.print(" | Temperature: ");
+  Serial.print(temperature);
+  Serial.print(" C | Voltage: ");
+  Serial.print(voltage);
+  Serial.print(" V | Current: ");
+  Serial.print(current);
+  Serial.println(" A");
+
+  delay(500);
+}
