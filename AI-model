@@ -1,1 +1,53 @@
+# Install first:
+# pip install pandas scikit-learn joblib
 
+import pandas as pd
+import joblib
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, accuracy_score
+
+# Your CSV must contain actual, labelled training examples.
+data = pd.read_csv("smart_grid_data.csv")
+
+features = ["voltage", "current", "temperature"]
+target = "status"
+
+X = data[features]
+y = data[target]
+
+# Check that all three conditions are represented.
+required = {"Normal", "Overload", "Fault"}
+if not required.issubset(set(y.unique())):
+    raise ValueError("Dataset must contain Normal, Overload and Fault labels.")
+
+# Keep a separate test set for evaluation.
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+model = RandomForestClassifier(
+    n_estimators=100,
+    random_state=42,
+    class_weight="balanced"
+)
+
+model.fit(X_train, y_train)
+
+predictions = model.predict(X_test)
+
+print("Test accuracy:", accuracy_score(y_test, predictions))
+print(classification_report(y_test, predictions, zero_division=0))
+
+# Save the trained model
+joblib.dump(model, "smart_grid_model.joblib")
+
+# Test one illustrative reading
+sample = pd.DataFrame(
+    [[6.0, 0.30, 28.0]],
+    columns=features
+)
+
+print("Predicted status:", model.predict(sample)[0])
+print("AI model saved successfully.")
